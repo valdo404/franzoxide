@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client as S3Client;
 use chrono::{Datelike, Timelike, Utc};
-use log::{debug, error, info};
+use log::{error, info};
 use std::collections::HashMap;
 use std::io::Write;
 use std::sync::Arc;
@@ -180,9 +180,10 @@ impl S3SinkConnector {
 
     /// Format records as JSON
     fn format_as_json(&self, records: &[KafkaRecord]) -> ConnectorResult<Vec<u8>> {
+        info!("Starting JSON formatting for {} records", records.len());
         let mut buffer = Vec::new();
 
-        for record in records {
+        for (i, record) in records.iter().enumerate() {
             let mut json_record = serde_json::Map::new();
 
             // Add metadata
@@ -205,11 +206,23 @@ impl S3SinkConnector {
 
             // Add key and value
             if !record.key.is_empty() {
+                info!(
+                    "Processing key for record {}/{}: {} bytes",
+                    i + 1,
+                    records.len(),
+                    record.key.len()
+                );
                 match serde_json::from_slice::<serde_json::Value>(&record.key) {
                     Ok(key) => {
+                        info!("Key for record {}/{} is valid JSON", i + 1, records.len());
                         json_record.insert("key".to_string(), key);
                     }
-                    Err(_) => {
+                    Err(_e) => {
+                        info!(
+                            "Key for record {}/{} is not valid JSON, encoding as base64",
+                            i + 1,
+                            records.len()
+                        );
                         // If key is not valid JSON, store it as base64
                         let base64_key = base64::encode(&record.key);
                         json_record
@@ -223,11 +236,23 @@ impl S3SinkConnector {
             }
 
             if !record.value.is_empty() {
+                info!(
+                    "Processing value for record {}/{}: {} bytes",
+                    i + 1,
+                    records.len(),
+                    record.value.len()
+                );
                 match serde_json::from_slice::<serde_json::Value>(&record.value) {
                     Ok(value) => {
+                        info!("Value for record {}/{} is valid JSON", i + 1, records.len());
                         json_record.insert("value".to_string(), value);
                     }
-                    Err(_) => {
+                    Err(_e) => {
+                        info!(
+                            "Value for record {}/{} is not valid JSON, encoding as base64",
+                            i + 1,
+                            records.len()
+                        );
                         // If value is not valid JSON, store it as base64
                         let base64_value = base64::encode(&record.value);
                         json_record
@@ -242,35 +267,62 @@ impl S3SinkConnector {
 
             // Add headers
             let mut headers = serde_json::Map::new();
+            info!(
+                "Processing {} headers for record {}/{}",
+                record.headers.len(),
+                i + 1,
+                records.len()
+            );
             for (key, value) in &record.headers {
                 headers.insert(key.clone(), serde_json::Value::String(value.clone()));
             }
             json_record.insert("headers".to_string(), serde_json::Value::Object(headers));
 
             // Write the record to the buffer
+            info!("Writing record {}/{} to buffer", i + 1, records.len());
             serde_json::to_writer(&mut buffer, &json_record)?;
             buffer.write_all(b"\n")?;
+            info!(
+                "Record {}/{} written to buffer, current buffer size: {} bytes",
+                i + 1,
+                records.len(),
+                buffer.len()
+            );
         }
 
+        info!(
+            "JSON formatting complete. Total buffer size: {} bytes",
+            buffer.len()
+        );
         Ok(buffer)
     }
 
     /// Upload data to S3
     async fn upload_to_s3(&self, key: &str, data: Vec<u8>) -> ConnectorResult<()> {
-        let client = self
-            .s3_client
-            .as_ref()
-            .ok_or_else(|| ConnectorError::General("S3 client not initialized".to_string()))?;
+        let client = self.s3_client.as_ref().ok_or_else(|| {
+            error!("Cannot upload to S3: client not initialized");
+            ConnectorError::General("S3 client not initialized".to_string())
+        })?;
 
-        debug!(
+        info!("S3 client successfully retrieved for upload operation");
+
+        info!(
             "Uploading {} bytes to s3://{}/{}",
             data.len(),
             self.bucket,
             key
         );
 
+        // Store the data size before moving it
+        let data_size = data.len();
+        info!("Creating ByteStream from {} bytes of data", data_size);
         let body = ByteStream::from(data);
+        info!("ByteStream created successfully");
 
+        info!(
+            "Preparing S3 PutObject request: bucket={}, key={}",
+            self.bucket, key
+        );
         match client
             .put_object()
             .bucket(&self.bucket)
@@ -281,10 +333,15 @@ impl S3SinkConnector {
         {
             Ok(_) => {
                 info!("Successfully uploaded to s3://{}/{}", self.bucket, key);
+                info!("S3 upload complete. Data size: {} bytes", data_size);
                 Ok(())
             }
             Err(err) => {
                 error!("Failed to upload to S3: {}", err);
+                error!(
+                    "Upload failed for bucket: {}, key: {}, data size: {} bytes",
+                    self.bucket, key, data_size
+                );
                 Err(ConnectorError::S3Error(err.to_string()))
             }
         }
@@ -302,6 +359,12 @@ impl Connector for S3SinkConnector {
 
         // Update configuration
         self.config.extend(config);
+
+        // Log configuration parameters
+        info!("S3 sink connector configuration:");
+        for (key, value) in &self.config {
+            info!("  {} = {}", key, value);
+        }
 
         // Get required configuration
         self.bucket = self
@@ -349,11 +412,88 @@ impl Connector for S3SinkConnector {
             .cloned()
             .unwrap_or_else(|| "us-east-1".to_string());
 
-        let config = aws_sdk_s3::config::Builder::new()
-            .region(aws_sdk_s3::config::Region::new(region))
-            .build();
+        info!("Using S3 region: {}", region);
 
-        self.s3_client = Some(aws_sdk_s3::Client::from_conf(config));
+        // Check for endpoint override (for MinIO)
+        let endpoint = self.config.get("s3.endpoint");
+        if let Some(endpoint_url) = endpoint {
+            info!("Using custom S3 endpoint: {}", endpoint_url);
+
+            // For MinIO, we need to use path style access
+            let mut config_builder = aws_sdk_s3::config::Builder::new()
+                .region(aws_sdk_s3::config::Region::new(region.clone()))
+                .force_path_style(true);
+
+            // Set endpoint
+            config_builder = config_builder.endpoint_url(endpoint_url);
+
+            // Set credentials if provided
+            if let (Some(access_key), Some(secret_key)) = (
+                self.config.get("s3.access.key"),
+                self.config.get("s3.secret.key"),
+            ) {
+                info!("Using provided AWS credentials");
+                let credentials = aws_sdk_s3::config::Credentials::new(
+                    access_key,
+                    secret_key,
+                    None,
+                    None,
+                    "rust-connect",
+                );
+                config_builder = config_builder.credentials_provider(credentials);
+            } else {
+                info!("No AWS credentials provided, using default credentials provider");
+            }
+
+            let config = config_builder.build();
+            info!("S3 client configured with custom endpoint");
+            self.s3_client = Some(aws_sdk_s3::Client::from_conf(config));
+        } else {
+            // Standard AWS configuration
+            info!("Using standard AWS S3 configuration");
+            let config = aws_sdk_s3::config::Builder::new()
+                .region(aws_sdk_s3::config::Region::new(region))
+                .build();
+
+            self.s3_client = Some(aws_sdk_s3::Client::from_conf(config));
+        }
+
+        info!("S3 client initialized successfully");
+
+        // Check if bucket exists and create it if it doesn't
+        if let Some(client) = &self.s3_client {
+            info!("Checking if bucket {} exists", self.bucket);
+            match client.head_bucket().bucket(&self.bucket).send().await {
+                Ok(_) => {
+                    info!("Bucket {} already exists", self.bucket);
+                }
+                Err(err) => {
+                    info!(
+                        "Bucket {} does not exist or cannot be accessed: {}",
+                        self.bucket, err
+                    );
+                    info!("Attempting to create bucket {}", self.bucket);
+
+                    match client.create_bucket().bucket(&self.bucket).send().await {
+                        Ok(_) => {
+                            info!("Created bucket {} successfully", self.bucket);
+                        }
+                        Err(err) => {
+                            error!("Failed to create bucket {}: {}", self.bucket, err);
+                            return Err(ConnectorError::S3Error(format!(
+                                "Failed to create bucket: {}",
+                                err
+                            )));
+                        }
+                    }
+                }
+            }
+        } else {
+            error!("S3 client is not initialized");
+            return Err(ConnectorError::General(
+                "S3 client not initialized".to_string(),
+            ));
+        }
 
         self.state = ConnectorState::Stopped;
 
@@ -384,21 +524,51 @@ impl SinkConnector for S3SinkConnector {
             return Ok(());
         }
 
-        debug!("Received {} records", records.len());
+        info!("Received {} records for processing", records.len());
+        for (i, record) in records.iter().enumerate().take(5) {
+            info!(
+                "Record {}: topic={}, partition={}, offset={}, key={:?}",
+                i,
+                record.topic,
+                record.partition,
+                record.offset,
+                String::from_utf8_lossy(&record.key)
+            );
+        }
+        if records.len() > 5 {
+            info!("... and {} more records", records.len() - 5);
+        }
 
         // Add records to buffer
         {
             let mut buffer = self.buffer.lock().await;
+            let prev_size = buffer.len();
+            info!(
+                "Adding {} records to buffer. Current buffer size: {}",
+                records.len(),
+                prev_size
+            );
             buffer.extend(records);
+            info!(
+                "Buffer size after adding records: {} -> {}",
+                prev_size,
+                buffer.len()
+            );
 
             // If buffer size exceeds flush size, flush
             if buffer.len() >= self.flush_size {
+                info!(
+                    "Buffer size {} exceeds threshold {}. Triggering flush.",
+                    buffer.len(),
+                    self.flush_size
+                );
                 let records_to_flush = buffer.clone();
                 buffer.clear();
 
                 // Drop the lock before flushing
                 drop(buffer);
 
+                info!("Flushing {} records from buffer", records_to_flush.len());
                 // Flush records
                 self.flush_records(records_to_flush).await?;
             }
@@ -408,10 +578,17 @@ impl SinkConnector for S3SinkConnector {
     }
 
     async fn flush(&mut self) -> ConnectorResult<()> {
+        info!("Manual flush requested");
         let records_to_flush = {
             let mut buffer = self.buffer.lock().await;
+            let record_count = buffer.len();
+            info!(
+                "Flushing {} records from buffer (manual flush)",
+                record_count
+            );
             let records = buffer.clone();
             buffer.clear();
+            info!("Buffer cleared after manual flush");
             records
         };
 
@@ -431,23 +608,57 @@ impl S3SinkConnector {
         }
 
         info!("Flushing {} records to S3", records.len());
+        info!("Buffer size threshold: {}", self.flush_size);
 
         // Group records by topic and partition
         let mut grouped_records: HashMap<(String, i32), Vec<KafkaRecord>> = HashMap::new();
 
+        info!("Grouping {} records by topic and partition", records.len());
         for record in records {
             let key = (record.topic.clone(), record.partition);
             grouped_records.entry(key).or_default().push(record);
         }
 
+        info!(
+            "Grouped into {} topic-partition groups",
+            grouped_records.len()
+        );
+        for (key, group) in &grouped_records {
+            info!(
+                "  Group (topic={}, partition={}): {} records",
+                key.0,
+                key.1,
+                group.len()
+            );
+        }
+
         // Process each group
         for ((_topic, _partition), records) in grouped_records {
             // Use the first record for key generation
-            let key = self.generate_key(&records[0]);
+            let first_record = &records[0];
+            info!(
+                "Using record for key generation: topic={}, partition={}, offset={}",
+                first_record.topic, first_record.partition, first_record.offset
+            );
+            let key = self.generate_key(first_record);
+            info!("Generated S3 key: {}", key);
 
             // Format records based on the configured format
+            info!(
+                "Formatting {} records using format: {:?}",
+                records.len(),
+                self.format
+            );
             let data = match self.format {
-                Format::Json => self.format_as_json(&records)?,
+                Format::Json => {
+                    info!("Using JSON formatter for {} records", records.len());
+                    let result = self.format_as_json(&records)?;
+                    info!(
+                        "JSON formatting complete. Output size: {} bytes",
+                        result.len()
+                    );
+                    result
+                }
                 Format::Avro => {
                     // Not implemented yet
                     return Err(ConnectorError::General(
@@ -462,16 +673,26 @@ impl S3SinkConnector {
                 }
                 Format::Bytes => {
                     // Just concatenate the raw values
+                    info!("Using raw bytes formatter for {} records", records.len());
                     let mut buffer = Vec::new();
                     for record in &records {
+                        info!("  Adding record: topic={}, partition={}, offset={}, value_size={} bytes", 
+                             record.topic, record.partition, record.offset, record.value.len());
                         buffer.extend_from_slice(&record.value);
                     }
+                    info!(
+                        "Bytes formatting complete. Output size: {} bytes",
+                        buffer.len()
+                    );
                     buffer
                 }
             };
 
             // Upload to S3
+            info!("Starting S3 upload for key: {}", key);
+            info!("Data size to upload: {} bytes", data.len());
             self.upload_to_s3(&key, data).await?;
+            info!("S3 upload completed successfully for key: {}", key);
         }
 
         Ok(())

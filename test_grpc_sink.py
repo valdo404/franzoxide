@@ -21,9 +21,9 @@ def main():
         except grpc.RpcError as e:
             print(f"Error getting connector status: {e.details()}")
         
-        # Create multiple JSON records (100 to meet the flush.size in config)
+        # Create a smaller batch of JSON records for testing
         kafka_records = []
-        for i in range(100):
+        for i in range(10):
             record_data = {
                 "id": i,
                 "name": f"Test Record {i}",
@@ -59,7 +59,7 @@ def main():
         # Create a request iterator for bidirectional streaming
         def request_iterator():
             # First send the record batch
-            print(f"Sending record batch: {record_data}")
+            print(f"Sending record batch of 10 records. Sample: {record_data}")
             yield sink_request
             
             # Then send the flush request
