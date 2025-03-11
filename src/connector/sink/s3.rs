@@ -161,7 +161,7 @@ impl S3SinkConnector {
             Partitioner::Time => {
                 // Time-based partitioning
                 let dt = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(record.timestamp)
-                    .unwrap_or_else(|| Utc::now());
+                    .unwrap_or_else(Utc::now);
 
                 format!(
                     "{}/{}/year={}/month={:02}/day={:02}/hour={:02}/{}.{}",

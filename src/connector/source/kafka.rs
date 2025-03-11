@@ -476,13 +476,13 @@ impl Connector for KafkaSourceConnector {
         // Create the consumer
         let consumer: LoggingConsumer = client_config
             .create_with_context(context)
-            .map_err(|e| ConnectorError::KafkaError(e))?;
+            .map_err(ConnectorError::KafkaError)?;
 
         // Subscribe to topics
         let topic_refs: Vec<&str> = self.topics.iter().map(|s| s.as_str()).collect();
         consumer
             .subscribe(&topic_refs)
-            .map_err(|e| ConnectorError::KafkaError(e))?;
+            .map_err(ConnectorError::KafkaError)?;
 
         self.consumer = Some(consumer);
 
@@ -539,7 +539,7 @@ impl SourceConnector for KafkaSourceConnector {
         // Commit offsets
         consumer
             .commit(&tpl, CommitMode::Async)
-            .map_err(|e| ConnectorError::KafkaError(e))?;
+            .map_err(ConnectorError::KafkaError)?;
 
         Ok(())
     }
