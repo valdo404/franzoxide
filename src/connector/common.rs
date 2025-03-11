@@ -10,16 +10,16 @@ pub trait Connector {
     /// Get the name of the connector
     #[allow(dead_code)]
     fn name(&self) -> &str;
-    
+
     /// Initialize the connector with the given configuration
     async fn initialize(&mut self, config: HashMap<String, String>) -> ConnectorResult<()>;
-    
+
     /// Start the connector
     async fn start(&mut self) -> ConnectorResult<()>;
-    
+
     /// Stop the connector
     async fn stop(&mut self) -> ConnectorResult<()>;
-    
+
     /// Get the current state of the connector
     async fn state(&self) -> ConnectorState;
 }
@@ -30,16 +30,16 @@ pub trait Connector {
 pub enum ConnectorState {
     /// The connector is not initialized
     Uninitialized,
-    
+
     /// The connector is running
     Running,
-    
+
     /// The connector is paused
     Paused,
-    
+
     /// The connector has failed
     Failed,
-    
+
     /// The connector is stopped
     Stopped,
 }
@@ -50,7 +50,7 @@ pub trait SourceConnector: Connector {
     /// Poll for records from the source system
     #[allow(dead_code)]
     async fn poll(&mut self) -> ConnectorResult<Vec<KafkaRecord>>;
-    
+
     /// Commit offsets for the given records
     #[allow(dead_code)]
     async fn commit(&mut self, offsets: Vec<(String, i32, i64)>) -> ConnectorResult<()>;
@@ -61,7 +61,7 @@ pub trait SourceConnector: Connector {
 pub trait SinkConnector: Connector {
     /// Put records to the sink system
     async fn put(&mut self, records: Vec<KafkaRecord>) -> ConnectorResult<()>;
-    
+
     /// Flush any buffered records to the sink system
     #[allow(dead_code)]
     async fn flush(&mut self) -> ConnectorResult<()>;
@@ -72,7 +72,7 @@ pub trait SinkConnector: Connector {
 pub struct TaskConfig {
     /// Task ID
     pub task_id: i32,
-    
+
     /// Configuration for the task
     pub config: HashMap<String, String>,
 }
@@ -82,8 +82,12 @@ pub struct TaskConfig {
 #[allow(dead_code)]
 pub trait ConnectorTaskFactory {
     /// Create a source connector task
-    async fn create_source_task(&self, config: TaskConfig) -> ConnectorResult<Box<dyn SourceConnector>>;
-    
+    async fn create_source_task(
+        &self,
+        config: TaskConfig,
+    ) -> ConnectorResult<Box<dyn SourceConnector>>;
+
     /// Create a sink connector task
-    async fn create_sink_task(&self, config: TaskConfig) -> ConnectorResult<Box<dyn SinkConnector>>;
+    async fn create_sink_task(&self, config: TaskConfig)
+        -> ConnectorResult<Box<dyn SinkConnector>>;
 }
