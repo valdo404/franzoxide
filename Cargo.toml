@@ -1,8 +1,8 @@
 [package]
-name = "rust-connect"
+name = "franzoxide"
 version = "0.1.0"
 edition = "2021"
-description = "A Kafka Connect clone written in Rust with gRPC interface"
+description = "Franzoxide: A high-performance Kafka Connect clone written in Rust"
 authors = ["Laurent Valdes"]
 
 [dependencies]
