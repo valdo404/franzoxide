@@ -1,0 +1,223 @@
+syntax = "proto3";
+
+package kafka.connect;
+
+option java_multiple_files = true;
+option java_package = "io.rustconnect.proto";
+option java_outer_classname = "RustConnectProto";
+
+// Service definition for Kafka Connect
+service ConnectorService {
+  // Bidirectional streaming RPC for source connectors
+  // The connector sends records to the system and receives acknowledgments
+  rpc SourceStream(stream SourceRequest) returns (stream SourceResponse) {}
+  
+  // Bidirectional streaming RPC for sink connectors
+  // The system sends records to the connector and receives acknowledgments
+  rpc SinkStream(stream SinkRequest) returns (stream SinkResponse) {}
+  
+  // Get connector configuration
+  rpc GetConfig(ConfigRequest) returns (ConfigResponse) {}
+  
+  // Update connector configuration
+  rpc UpdateConfig(ConfigUpdateRequest) returns (ConfigResponse) {}
+  
+  // Get connector status
+  rpc GetStatus(StatusRequest) returns (StatusResponse) {}
+}
+
+// Common message types
+
+// Represents a Kafka record
+message KafkaRecord {
+  string topic = 1;
+  int32 partition = 2;
+  int64 offset = 3;
+  int64 timestamp = 4;
+  bytes key = 5;
+  bytes value = 6;
+  map<string, string> headers = 7;
+}
+
+// Represents connector configuration
+message ConnectorConfig {
+  string connector_class = 1;
+  string name = 2;
+  map<string, string> config = 3;
+  int32 tasks_max = 4;
+}
+
+// Source connector messages
+
+message SourceRequest {
+  oneof request {
+    // Heartbeat to keep connection alive
+    Heartbeat heartbeat = 1;
+    // Acknowledgment of records received by the system
+    RecordAck ack = 2;
+    // Commit offsets
+    OffsetCommit commit = 3;
+  }
+}
+
+message SourceResponse {
+  oneof response {
+    // Heartbeat response
+    Heartbeat heartbeat = 1;
+    // Records from the source connector to the system
+    RecordBatch record_batch = 2;
+    // Error from the connector
+    ConnectorError error = 3;
+  }
+}
+
+// Sink connector messages
+
+message SinkRequest {
+  oneof request {
+    // Heartbeat to keep connection alive
+    Heartbeat heartbeat = 1;
+    // Records from the system to the sink connector
+    RecordBatch record_batch = 2;
+    // Flush request to ensure data is written
+    FlushRequest flush = 3;
+  }
+}
+
+message SinkResponse {
+  oneof response {
+    // Heartbeat response
+    Heartbeat heartbeat = 1;
+    // Acknowledgment of records processed by the sink
+    RecordAck ack = 2;
+    // Error from the connector
+    ConnectorError error = 3;
+    // Flush response
+    FlushResponse flush_response = 4;
+  }
+}
+
+// Configuration messages
+
+message ConfigRequest {
+  string connector_name = 1;
+}
+
+message ConfigUpdateRequest {
+  ConnectorConfig config = 1;
+}
+
+message ConfigResponse {
+  ConnectorConfig config = 1;
+}
+
+// Status messages
+
+message StatusRequest {
+  string connector_name = 1;
+}
+
+message StatusResponse {
+  enum State {
+    UNKNOWN = 0;
+    RUNNING = 1;
+    PAUSED = 2;
+    FAILED = 3;
+    UNASSIGNED = 4;
+  }
+  
+  State state = 1;
+  string worker_id = 2;
+  repeated TaskStatus tasks = 3;
+  string error_message = 4;
+}
+
+message TaskStatus {
+  int32 task_id = 1;
+  StatusResponse.State state = 2;
+  string worker_id = 3;
+  string error_message = 4;
+}
+
+// Helper messages
+
+message Heartbeat {
+  int64 timestamp = 1;
+}
+
+message RecordBatch {
+  repeated KafkaRecord records = 1;
+}
+
+message RecordAck {
+  repeated RecordId record_ids = 1;
+  bool success = 2;
+  string error_message = 3;
+}
+
+message RecordId {
+  string topic = 1;
+  int32 partition = 2;
+  int64 offset = 3;
+}
+
+message OffsetCommit {
+  repeated RecordId record_ids = 1;
+}
+
+message FlushRequest {
+  string request_id = 1;
+}
+
+message FlushResponse {
+  string request_id = 1;
+  bool success = 2;
+  string error_message = 3;
+}
+
+message ConnectorError {
+  string error_message = 1;
+  string error_code = 2;
+  string stack_trace = 3;
+}
+
+// S3 Sink specific messages
+message S3SinkConfig {
+  // S3 configuration
+  string s3_bucket_name = 1;
+  string s3_region = 2;
+  string s3_prefix = 3;
+  
+  // Format configuration
+  enum Format {
+    JSON = 0;
+    AVRO = 1;
+    PARQUET = 2;
+    BYTES = 3;
+  }
+  Format format = 4;
+  
+  // Partitioning configuration
+  enum Partitioner {
+    DEFAULT = 0;
+    FIELD = 1;
+    TIME = 2;
+  }
+  Partitioner partitioner = 5;
+  string partition_field = 6;
+  
+  // Time-based partitioning configuration
+  string time_partition_pattern = 7;
+  
+  // Flush configuration
+  int32 flush_size = 8;
+  int32 rotate_interval_ms = 9;
+  
+  // Compression configuration
+  enum Compression {
+    NONE = 0;
+    GZIP = 1;
+    SNAPPY = 2;
+  }
+  Compression compression = 10;
+}
