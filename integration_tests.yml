@@ -1,0 +1,11 @@
+groups:
+  - name: rust-connect-tests
+    rules:
+      - alert: KafkaToS3ConnectorTest
+        expr: rust_connect_test_success != 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kafka to S3 connector test failed"
+          description: "The integration test for the Kafka to S3 connector has failed."

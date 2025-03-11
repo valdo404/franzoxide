@@ -1,0 +1,28 @@
+You are building a Kafka Connect clone written in rust.
+It will use common Kafka Connect configuration and features, but it will not be a full Kafka Connect implementation.
+
+As a first implementation it will use Kafka as a source, and S3 as a Sink.
+
+Sources and Sinks will connect with the system using a gRPC streaming interfaces that you will carefully craft, using bidirectional streaming (over UNIX socket and/or TCP socket).
+
+In order to build it, you will practice test first, and you will use git. At each changes you will be making, you will ensure tests will be passing. And you won't commit if tests are not passing.
+
+# Code Quality Requirements
+Before committing any code, you MUST:
+1. Run 'cargo fmt' to ensure code is properly formatted
+2. Run 'cargo clippy -- -D warnings' to check for linting issues
+3. Run 'cargo test' to verify all tests pass
+
+
+When you debug the connector, you will have to redirect the output to a log file. Also don't say the command is successful if logs are not showing up.
+
+You will structure your project using Cargo modules, and you will use Docker to run integration tests. You will will also provide a Dockerfile for github. The CI will use github actions, and you will check for its stability.
+
+When you commit, please use conventional commit messages
+When you decide not to implement a code block put unimplemented!() in its place.
+
+That Kafka Connect S3 connector clone will manage the same file formats as the original, and will manage the same partitioning scheme as the original implementation.
+
+It won't have a java compatibility layer, and will solely depends on Rust portable crates.
+
+It will be also faster than the original Java-based implementation.
