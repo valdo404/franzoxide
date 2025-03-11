@@ -1,6 +1,6 @@
-# Rust Connect Gap Analysis
+# Franzoxide Gap Analysis
 
-This document identifies the gaps between the current implementation of Rust Connect and the target feature set for S3 sink connectors, focusing on Parquet partitioning and Apache Iceberg integration.
+This document identifies the gaps between the current implementation of Franzoxide and the target feature set for S3 sink connectors, focusing on Parquet partitioning and Apache Iceberg integration.
 
 ## Feature Gap Analysis
 

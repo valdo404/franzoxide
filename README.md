@@ -1,10 +1,10 @@
-# Rust Connect
+# Franzoxide
 
-A Kafka Connect clone written in Rust with gRPC interface.
+A high-performance Kafka Connect clone written in Rust.
 
 ## Project Description
 
-Rust Connect is a high-performance alternative to Kafka Connect, implemented in Rust. It connects Kafka with S3 storage and aims to provide similar functionality with better performance and resource efficiency.
+Franzoxide is a high-performance alternative to Kafka Connect, implemented in Rust. It connects Kafka with S3 storage and aims to provide similar functionality with better performance and resource efficiency. The name combines "Franz" (referencing Franz Kafka) with "oxide" (a nod to Rust, as rust is iron oxide).
 
 ## Features
 
