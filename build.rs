@@ -1,12 +1,20 @@
-// Removed unused imports
+// Build script for Rust Connect
+
+use std::{env, path::PathBuf};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Tell Cargo to re-run this build script if the proto file changes
     println!("cargo:rerun-if-changed=proto/connector.proto");
     println!("cargo:rerun-if-changed=proto");
 
-    // Compile the proto file
-    tonic_build::compile_protos("proto/connector.proto")?;
+    // Get the output directory from cargo
+    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    
+    // Compile the proto file with file descriptor set for reflection
+    tonic_build::configure()
+        .build_server(true)
+        .file_descriptor_set_path(out_dir.join("connector_descriptor.bin"))
+        .compile_protos(&["proto/connector.proto"], &["proto"])?;
 
     Ok(())
 }

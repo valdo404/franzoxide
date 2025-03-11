@@ -7,11 +7,12 @@ authors = ["Laurent Valdes"]
 
 [dependencies]
 # gRPC and Protocol Buffers
-tonic = "0.9"
-prost = "0.11"
-tokio = { version = "1.28", features = ["full"] }
+tonic = "0.12.3"
+prost = "0.13.5"
+tokio = { version = "1.44", features = ["full"] }
 tokio-stream = "0.1"
-prost-types = "0.11"
+prost-types = "0.13.5"
+tonic-reflection = "0.12.3"
 
 # Kafka client
 rdkafka = { version = "0.32", features = ["cmake-build", "ssl"] }
@@ -51,4 +52,4 @@ tempfile = "3.6"
 test-log = "0.2"
 
 [build-dependencies]
-tonic-build = "0.9"
+tonic-build = "0.12.3"

@@ -3,6 +3,7 @@ use log::{error, info};
 use std::net::SocketAddr;
 use std::path::Path;
 use std::pin::Pin;
+use tonic_reflection::server::Builder as ReflectionBuilder;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 // Removed unused tokio::io imports
@@ -10,10 +11,9 @@ use futures_util::stream::Stream;
 use tokio::sync::Mutex;
 use tonic::transport::Server;
 
-// Include the generated proto code
-pub mod kafka_connect {
-    tonic::include_proto!("kafka.connect");
-}
+// Include the proto module with file descriptor set for reflection
+mod proto;
+use proto::kafka_connect;
 
 // Import modules
 mod connector;
@@ -102,12 +102,19 @@ async fn main() -> anyhow::Result<()> {
         let addr: SocketAddr = tcp_addr.parse()?;
         info!("Starting gRPC server on {}", addr);
 
+        // Create reflection service
+        let reflection_service = ReflectionBuilder::configure()
+            .register_encoded_file_descriptor_set(kafka_connect::FILE_DESCRIPTOR_SET)
+            .build_v1()
+            .unwrap();
+
         let tcp_server = Server::builder()
             .add_service(
                 kafka_connect::connector_service_server::ConnectorServiceServer::new(
                     connector_service.clone(),
                 ),
             )
+            .add_service(reflection_service)
             .serve(addr);
 
         tokio::spawn(async move {
@@ -127,12 +134,19 @@ async fn main() -> anyhow::Result<()> {
             std::fs::remove_file(path)?;
         }
 
+        // Create reflection service for Unix socket
+        let reflection_service = ReflectionBuilder::configure()
+            .register_encoded_file_descriptor_set(kafka_connect::FILE_DESCRIPTOR_SET)
+            .build_v1()
+            .unwrap();
+
         let uds_server = tonic::transport::Server::builder()
             .add_service(
                 kafka_connect::connector_service_server::ConnectorServiceServer::new(
                     connector_service,
                 ),
             )
+            .add_service(reflection_service)
             .serve_with_incoming(UnixIncoming::new(tokio::net::UnixListener::bind(path)?));
 
         tokio::spawn(async move {
