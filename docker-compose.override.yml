@@ -1,0 +1,8 @@
+version: '3'
+
+services:
+  # Override the rust-connect service for local development
+  rust-connect:
+    environment:
+      - RUST_LOG=debug
+    command: ["--config", "/app/config/connect.json"]

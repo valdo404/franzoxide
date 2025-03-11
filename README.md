@@ -4,14 +4,55 @@ A Kafka Connect clone written in Rust with gRPC interface.
 
 ## Project Description
 
-Rust Connect is a high-performance alternative to Kafka Connect, implemented in Rust. It aims to provide similar functionality with better performance and resource efficiency.
+Rust Connect is a high-performance alternative to Kafka Connect, implemented in Rust. It connects Kafka with S3 storage and aims to provide similar functionality with better performance and resource efficiency.
 
-## Coming Soon
+## Features
 
-- Kafka source connector
-- S3 sink connector
+- Kafka source connector to read data from Kafka topics
+- S3 sink connector to write data to S3-compatible storage
 - gRPC API for connector management
-- Docker support for easy deployment
+- Support for both TCP and Unix socket communication
+- Docker support for easy deployment and testing
+
+## Requirements
+
+- Rust 1.70 or later
+- Docker and Docker Compose (for containerized deployment)
+- Kafka cluster
+- S3-compatible storage (e.g., MinIO, AWS S3)
+
+## Building from Source
+
+```bash
+# Clone the repository
+git clone https://github.com/valdo404/rust-connect.git
+cd rust-connect
+
+# Build the project
+cargo build --release
+```
+
+## Running with Docker
+
+The easiest way to run Rust Connect is using Docker Compose, which sets up a complete environment including Kafka (in KRaft mode without Zookeeper), Schema Registry, and MinIO (S3-compatible storage).
+
+```bash
+# Start the services
+docker-compose up -d
+
+# Check the logs
+docker-compose logs -f rust-connect
+
+# Stop the services
+docker-compose down
+```
+
+## Running Integration Tests
+
+Integration tests are included to verify the functionality of the Kafka to S3 connector flow:
+
+```bash
+>>>>>>> 57f95d7 (feat(docker): configure Kafka in KRaft mode without Zookeeper)
 # Run the integration tests
 docker-compose run --rm rust-connect-test
 ```
