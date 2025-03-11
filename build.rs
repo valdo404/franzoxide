@@ -9,11 +9,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Get the output directory from cargo
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-    
+
     // Compile the proto file with file descriptor set for reflection
     tonic_build::configure()
         .build_server(true)
         .file_descriptor_set_path(out_dir.join("connector_descriptor.bin"))
+        // Add attribute to suppress clippy warnings for generated code
+        .extern_path(".proto", "::proto")
+        .type_attribute(".", "#[allow(clippy::enum_variant_names)]")
         .compile_protos(&["proto/connector.proto"], &["proto"])?;
 
     Ok(())

@@ -30,6 +30,7 @@ impl ConnectorService for ConnectorServiceImpl {
     /// Bidirectional streaming RPC for source connectors
     type SourceStreamStream = ReceiverStream<Result<SourceResponse, Status>>;
 
+    #[allow(unused_variables)]
     async fn source_stream(
         &self,
         request: Request<tonic::Streaming<SourceRequest>>,
@@ -38,7 +39,7 @@ impl ConnectorService for ConnectorServiceImpl {
 
         let mut in_stream = request.into_inner();
         let (tx, rx) = tokio::sync::mpsc::channel(100);
-        let _manager = self.manager.clone(); // Prefixed with underscore as it's currently unused
+        let manager = self.manager.clone();
 
         // Spawn a task to handle the incoming stream
         tokio::spawn(async move {
@@ -69,11 +70,13 @@ impl ConnectorService for ConnectorServiceImpl {
                             }
                             Some(source_request::Request::Ack(ack)) => {
                                 log::debug!("Received ack from source connector: {:?}", ack);
-                                // Process acknowledgment
+                                unimplemented!(
+                                    "Source connector acknowledgment processing not implemented"
+                                )
                             }
                             Some(source_request::Request::Commit(commit)) => {
                                 log::debug!("Received commit from source connector: {:?}", commit);
-                                // Process commit
+                                unimplemented!("Source connector commit processing not implemented")
                             }
                             None => {
                                 log::warn!("Received empty request from source connector");
@@ -104,7 +107,7 @@ impl ConnectorService for ConnectorServiceImpl {
 
         let mut in_stream = request.into_inner();
         let (tx, rx) = tokio::sync::mpsc::channel(100);
-        let _manager = self.manager.clone(); // Prefixed with underscore as it's currently unused
+        let manager = self.manager.clone();
 
         // Spawn a task to handle the incoming stream
         tokio::spawn(async move {
@@ -138,7 +141,67 @@ impl ConnectorService for ConnectorServiceImpl {
                                 );
 
                                 // Process the record batch
-                                // In a real implementation, this would forward the records to the sink connector
+                                // Forward the records to the sink connector
+                                let manager_lock = manager.lock().await;
+                                let sink_name = "s3-sink-0"; // Use the first task of the s3-sink connector
+
+                                // Get the sink connector
+                                let sink_connector =
+                                    match manager_lock.sink_connectors.get(sink_name) {
+                                        Some(connector) => connector.clone(),
+                                        None => {
+                                            log::error!("Sink connector not found: {}", sink_name);
+
+                                            // Send an error acknowledgment
+                                            let resp = SinkResponse {
+                                                response: Some(sink_response::Response::Ack(
+                                                    RecordAck {
+                                                        record_ids: vec![],
+                                                        success: false,
+                                                        error_message: format!(
+                                                            "Sink connector not found: {}",
+                                                            sink_name
+                                                        ),
+                                                    },
+                                                )),
+                                            };
+
+                                            if let Err(e) = tx.send(Ok(resp)).await {
+                                                log::error!("Failed to send error response: {}", e);
+                                                break;
+                                            }
+
+                                            continue;
+                                        }
+                                    };
+
+                                // Drop the manager lock before locking the sink connector
+                                drop(manager_lock);
+
+                                // Lock the sink connector and put records
+                                let mut sink = sink_connector.lock().await;
+                                if let Err(e) = sink.put(batch.records.clone()).await {
+                                    log::error!("Failed to put records to sink connector: {}", e);
+
+                                    // Send an error acknowledgment
+                                    let resp = SinkResponse {
+                                        response: Some(sink_response::Response::Ack(RecordAck {
+                                            record_ids: vec![],
+                                            success: false,
+                                            error_message: format!(
+                                                "Failed to put records to sink connector: {}",
+                                                e
+                                            ),
+                                        })),
+                                    };
+
+                                    if let Err(e) = tx.send(Ok(resp)).await {
+                                        log::error!("Failed to send error response: {}", e);
+                                        break;
+                                    }
+
+                                    continue;
+                                }
 
                                 // Send an acknowledgment
                                 let record_ids = batch
@@ -171,7 +234,71 @@ impl ConnectorService for ConnectorServiceImpl {
                                 );
 
                                 // Process the flush request
-                                // In a real implementation, this would trigger the sink connector to flush data
+                                // Trigger the sink connector to flush data
+                                let manager_lock = manager.lock().await;
+                                let sink_name = "s3-sink-0"; // Use the first task of the s3-sink connector
+
+                                // Get the sink connector
+                                let sink_connector = match manager_lock
+                                    .sink_connectors
+                                    .get(sink_name)
+                                {
+                                    Some(connector) => connector.clone(),
+                                    None => {
+                                        log::error!("Sink connector not found: {}", sink_name);
+
+                                        // Send an error response
+                                        let resp = SinkResponse {
+                                            response: Some(sink_response::Response::FlushResponse(
+                                                FlushResponse {
+                                                    request_id: flush.request_id,
+                                                    success: false,
+                                                    error_message: format!(
+                                                        "Sink connector not found: {}",
+                                                        sink_name
+                                                    ),
+                                                },
+                                            )),
+                                        };
+
+                                        if let Err(e) = tx.send(Ok(resp)).await {
+                                            log::error!("Failed to send error response: {}", e);
+                                            break;
+                                        }
+
+                                        continue;
+                                    }
+                                };
+
+                                // Drop the manager lock before locking the sink connector
+                                drop(manager_lock);
+
+                                // Lock the sink connector and flush
+                                let mut sink = sink_connector.lock().await;
+                                if let Err(e) = sink.flush().await {
+                                    log::error!("Failed to flush sink connector: {}", e);
+
+                                    // Send an error response
+                                    let resp = SinkResponse {
+                                        response: Some(sink_response::Response::FlushResponse(
+                                            FlushResponse {
+                                                request_id: flush.request_id,
+                                                success: false,
+                                                error_message: format!(
+                                                    "Failed to flush sink connector: {}",
+                                                    e
+                                                ),
+                                            },
+                                        )),
+                                    };
+
+                                    if let Err(e) = tx.send(Ok(resp)).await {
+                                        log::error!("Failed to send error response: {}", e);
+                                        break;
+                                    }
+
+                                    continue;
+                                }
 
                                 // Send a flush response
                                 let resp = SinkResponse {
@@ -250,15 +377,12 @@ impl ConnectorService for ConnectorServiceImpl {
 
         log::info!("Update config request for connector: {}", config.name);
 
-        // In a real implementation, this would update the connector configuration
-        // For now, we just return the same configuration
-
-        Ok(Response::new(ConfigResponse {
-            config: Some(config),
-        }))
+        // Update the connector configuration
+        unimplemented!("Connector configuration update not implemented");
     }
 
     /// Get connector status
+    #[allow(unused_variables)]
     async fn get_status(
         &self,
         request: Request<StatusRequest>,
@@ -276,9 +400,10 @@ impl ConnectorService for ConnectorServiceImpl {
                 Status::not_found(format!("Connector not found: {}", req.connector_name))
             })?;
 
-        // In a real implementation, this would get the actual status of the connector
-        // For now, we just return a mock status
+        // Get the actual status of the connector
+        unimplemented!("Connector status retrieval not implemented");
 
+        #[allow(unreachable_code)]
         let status = StatusResponse {
             state: status_response::State::Running as i32,
             worker_id: "worker-1".to_string(),

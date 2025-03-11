@@ -1,0 +1,2 @@
+# Allow enum variant names that end with the enum's name in generated code
+enum-variant-name-threshold = 0

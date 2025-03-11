@@ -19,7 +19,7 @@ pub struct ConnectorManager {
     source_connectors: HashMap<String, Arc<Mutex<Box<dyn SourceConnector + Send>>>>,
 
     /// Sink connectors
-    sink_connectors: HashMap<String, Arc<Mutex<Box<dyn SinkConnector + Send>>>>,
+    pub sink_connectors: HashMap<String, Arc<Mutex<Box<dyn SinkConnector + Send>>>>,
 
     /// Record channels
     record_channels: HashMap<String, mpsc::Sender<Vec<KafkaRecord>>>,
