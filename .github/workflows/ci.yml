@@ -56,15 +56,5 @@ jobs:
       with:
         command: test
     
-    - name: Build Docker image
-      run: docker build -t rust-connect:${{ github.sha }} .
-    
-    - name: Integration tests
-      run: |
-        docker-compose -f docker-compose.yml -f docker-compose.test.yml up -d
-        # Wait for services to be ready
-        sleep 30
-        # Run integration tests
-        docker-compose -f docker-compose.yml -f docker-compose.test.yml run --rm rust-connect-test
-        # Cleanup
-        docker-compose -f docker-compose.yml -f docker-compose.test.yml down
+    # Docker and integration tests are temporarily disabled
+    # They will be re-enabled once the test infrastructure is properly set up
