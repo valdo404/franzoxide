@@ -52,7 +52,6 @@ docker-compose down
 Integration tests are included to verify the functionality of the Kafka to S3 connector flow:
 
 ```bash
->>>>>>> 57f95d7 (feat(docker): configure Kafka in KRaft mode without Zookeeper)
 # Run the integration tests
 docker-compose run --rm rust-connect-test
 ```
