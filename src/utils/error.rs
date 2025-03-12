@@ -2,6 +2,7 @@ use thiserror::Error;
 
 /// Error types for the Rust-Connect application
 #[derive(Error, Debug)]
+#[allow(dead_code)]
 pub enum ConnectorError {
     /// Error related to configuration
     #[error("Configuration error: {0}")]
@@ -18,6 +19,10 @@ pub enum ConnectorError {
     /// Error related to gRPC
     #[error("gRPC error: {0}")]
     GrpcError(#[from] tonic::Status),
+
+    /// Error related to data format conversion
+    #[error("Format error: {0}")]
+    FormatError(String),
 
     /// Error related to serialization/deserialization
     #[error("Serialization error: {0}")]

@@ -3,7 +3,8 @@ use log::{debug, error, info, warn};
 use rdkafka::client::ClientContext;
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
 use rdkafka::consumer::{
-    CommitMode, Consumer, ConsumerContext, DefaultConsumerContext, Rebalance, StreamConsumer,
+    BaseConsumer, CommitMode, Consumer, ConsumerContext, DefaultConsumerContext, Rebalance,
+    StreamConsumer,
 };
 use rdkafka::error::KafkaResult;
 use rdkafka::message::{BorrowedMessage, Headers, Message};
@@ -24,11 +25,11 @@ struct KafkaSourceContext;
 impl ClientContext for KafkaSourceContext {}
 
 impl ConsumerContext for KafkaSourceContext {
-    fn pre_rebalance(&self, rebalance: &Rebalance) {
+    fn pre_rebalance(&self, _consumer: &BaseConsumer<Self>, rebalance: &Rebalance) {
         info!("Pre rebalance: {:?}", rebalance);
     }
 
-    fn post_rebalance(&self, rebalance: &Rebalance) {
+    fn post_rebalance(&self, _consumer: &BaseConsumer<Self>, rebalance: &Rebalance) {
         info!("Post rebalance: {:?}", rebalance);
     }
 
@@ -179,6 +180,7 @@ impl KafkaSourceConnector {
     }
 
     /// Start the polling loop
+    #[allow(dead_code)]
     async fn start_polling_loop(&self) -> ConnectorResult<()> {
         let record_tx = match &self.record_tx {
             Some(tx) => tx.clone(),
@@ -191,46 +193,18 @@ impl KafkaSourceConnector {
         let consumer = match &self.consumer {
             Some(_) => {
                 // Since we can't easily clone the consumer, we'll create a new one with the same topics
-                // in the actual implementation. For now, to make it compile, we'll just use the existing consumer
-                // in a way that doesn't cause borrowing issues.
+                let mut client_config = ClientConfig::new();
+                for (key, value) in &self.config {
+                    client_config.set(key, value);
+                }
 
-                // This is a workaround to make it compile - in a real implementation, we would
-                // create a new consumer with the same configuration
-                // Extract topics from config
-                let topics_str = self
-                    .config
-                    .get("topics")
-                    .cloned()
-                    .unwrap_or_else(|| "topic1".to_string());
-                let topics_vec: Vec<&str> = topics_str.split(',').collect();
-                let group_id = self
-                    .config
-                    .get("group.id")
-                    .cloned()
-                    .unwrap_or_else(|| "group1".to_string());
+                let consumer: StreamConsumer<DefaultConsumerContext> =
+                    client_config.create().map_err(ConnectorError::KafkaError)?;
 
-                // Create consumer config
-                let mut consumer_config = rdkafka::config::ClientConfig::new();
-                consumer_config.set("group.id", &group_id);
-                consumer_config.set(
-                    "bootstrap.servers",
-                    self.config
-                        .get("bootstrap.servers")
-                        .unwrap_or(&"localhost:9092".to_string()),
-                );
-                consumer_config.set("enable.auto.commit", "false");
-
-                // Create consumer
-                let consumer = consumer_config
-                    .create::<rdkafka::consumer::StreamConsumer>()
-                    .map_err(|e| {
-                        ConnectorError::General(format!("Failed to create consumer: {}", e))
-                    })?;
-
-                // Subscribe to topics
-                consumer.subscribe(&topics_vec).map_err(|e| {
-                    ConnectorError::General(format!("Failed to subscribe to topics: {}", e))
-                })?;
+                let topic_strs: Vec<&str> = self.topics.iter().map(|s| s.as_str()).collect();
+                consumer
+                    .subscribe(&topic_strs)
+                    .map_err(ConnectorError::KafkaError)?;
 
                 consumer
             }
@@ -241,16 +215,14 @@ impl KafkaSourceConnector {
             }
         };
 
-        // Start a task to poll for records
+        // Spawn a task to poll for records
         tokio::spawn(async move {
             loop {
-                // Poll for records
-                match KafkaSourceConnector::poll_records_static(&consumer, offsets.clone()).await {
+                match Self::poll_records_static(&consumer, offsets.clone()).await {
                     Ok(records) => {
                         if !records.is_empty() {
-                            // Send records to the sink
                             if let Err(e) = record_tx.send(records).await {
-                                error!("Failed to send records to sink: {}", e);
+                                error!("Error sending records to sink: {}", e);
                                 break;
                             }
                         }
@@ -261,11 +233,13 @@ impl KafkaSourceConnector {
                     }
                 }
 
-                // Commit offsets periodically
-                Self::commit_offsets_static(&consumer, offsets.clone()).await;
+                // Commit offsets
+                if let Err(e) = Self::commit_offsets_static(&consumer, offsets.clone()).await {
+                    error!("Error committing offsets: {}", e);
+                }
 
-                // Sleep a bit to avoid busy waiting
-                time::sleep(Duration::from_millis(10)).await;
+                // Sleep for a short time to avoid busy waiting
+                time::sleep(Duration::from_millis(100)).await;
             }
         });
 
@@ -273,11 +247,12 @@ impl KafkaSourceConnector {
     }
 
     /// Static method to poll for records (used in the polling loop)
+    #[allow(dead_code)]
     async fn poll_records_static(
         consumer: &StreamConsumer<DefaultConsumerContext>,
         offsets: Arc<Mutex<HashMap<(String, i32), i64>>>,
     ) -> ConnectorResult<Vec<KafkaRecord>> {
-        let mut records = Vec::with_capacity(100);
+        let mut records = Vec::new();
 
         for _ in 0..100 {
             match time::timeout(Duration::from_millis(100), consumer.recv()).await {
@@ -317,6 +292,7 @@ impl KafkaSourceConnector {
     }
 
     /// Static method to convert a Kafka message to a KafkaRecord (used in the polling loop)
+    #[allow(dead_code)]
     fn message_to_record_static(msg: &BorrowedMessage) -> KafkaRecord {
         let topic = msg.topic().to_string();
         let partition = msg.partition();
@@ -355,38 +331,31 @@ impl KafkaSourceConnector {
     }
 
     /// Static method to commit offsets (used in the polling loop)
+    #[allow(dead_code)]
     async fn commit_offsets_static(
         consumer: &StreamConsumer<DefaultConsumerContext>,
         offsets: Arc<Mutex<HashMap<(String, i32), i64>>>,
-    ) {
-        // Get offsets to commit
+    ) -> ConnectorResult<()> {
         let offsets_to_commit = {
             let offsets = offsets.lock().unwrap();
             offsets.clone()
         };
 
         if offsets_to_commit.is_empty() {
-            return;
+            return Ok(());
         }
 
-        // Create a topic partition list for committing
         let mut tpl = TopicPartitionList::new();
         for ((topic, partition), offset) in offsets_to_commit {
             tpl.add_partition_offset(&topic, partition, Offset::Offset(offset))
-                .unwrap_or_else(|e| {
-                    error!("Failed to add partition offset: {}", e);
-                });
+                .map_err(ConnectorError::KafkaError)?;
         }
 
-        // Commit offsets
-        match consumer.commit(&tpl, CommitMode::Async) {
-            Ok(_) => {
-                debug!("Offsets committed successfully");
-            }
-            Err(e) => {
-                error!("Failed to commit offsets: {}", e);
-            }
-        }
+        consumer
+            .commit(&tpl, CommitMode::Async)
+            .map_err(ConnectorError::KafkaError)?;
+
+        Ok(())
     }
 }
 
@@ -397,114 +366,101 @@ impl Connector for KafkaSourceConnector {
     }
 
     async fn initialize(&mut self, config: HashMap<String, String>) -> ConnectorResult<()> {
-        info!("Initializing Kafka source connector: {}", self.name);
+        // Store configuration
+        self.config = config.clone();
 
-        // Update configuration
-        self.config.extend(config);
-
-        // Get required configuration
-        let bootstrap_servers = self
-            .config
-            .get("bootstrap.servers")
-            .ok_or_else(|| ConnectorError::ConfigError("Missing bootstrap.servers".to_string()))?
-            .clone();
-
-        let topics_str = self
-            .config
-            .get("topics")
-            .ok_or_else(|| ConnectorError::ConfigError("Missing topics".to_string()))?
-            .clone();
-
-        self.topics = topics_str
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .collect();
-
-        if self.topics.is_empty() {
+        // Extract topics from config
+        if let Some(topics) = config.get("topics") {
+            self.topics = topics
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect::<Vec<_>>();
+        } else {
             return Err(ConnectorError::ConfigError(
-                "No topics specified".to_string(),
+                "Missing required config: topics".to_string(),
             ));
         }
 
-        // Get optional configuration with defaults
-        let group_id = self
-            .config
-            .get("group.id")
-            .cloned()
-            .unwrap_or_else(|| "rust-connect".to_string());
+        // Extract poll timeout
+        if let Some(timeout) = config.get("poll.timeout.ms") {
+            self.poll_timeout_ms = timeout.parse().map_err(|_| {
+                ConnectorError::ConfigError(format!("Invalid poll.timeout.ms value: {}", timeout))
+            })?;
+        }
 
-        let poll_timeout_ms_str = self
-            .config
-            .get("poll.timeout.ms")
-            .cloned()
-            .unwrap_or_else(|| "100".to_string());
-
-        self.poll_timeout_ms = poll_timeout_ms_str.parse().map_err(|_| {
-            ConnectorError::ConfigError(format!("Invalid poll.timeout.ms: {}", poll_timeout_ms_str))
-        })?;
-
-        let batch_size_str = self
-            .config
-            .get("batch.size")
-            .cloned()
-            .unwrap_or_else(|| "100".to_string());
-
-        self.batch_size = batch_size_str.parse().map_err(|_| {
-            ConnectorError::ConfigError(format!("Invalid batch.size: {}", batch_size_str))
-        })?;
+        // Extract batch size
+        if let Some(batch_size) = config.get("batch.size") {
+            self.batch_size = batch_size.parse().map_err(|_| {
+                ConnectorError::ConfigError(format!("Invalid batch.size value: {}", batch_size))
+            })?;
+        }
 
         // Create Kafka consumer
-        let context = KafkaSourceContext;
-
         let mut client_config = ClientConfig::new();
-        client_config
-            .set("bootstrap.servers", &bootstrap_servers)
-            .set("group.id", &group_id)
-            .set("enable.auto.commit", "false")
-            .set("auto.offset.reset", "earliest")
-            .set("enable.partition.eof", "false")
-            .set_log_level(RDKafkaLogLevel::Debug);
 
-        // Add any additional configuration
-        for (key, value) in &self.config {
-            if key.starts_with("kafka.") {
-                let kafka_key = key.strip_prefix("kafka.").unwrap();
-                client_config.set(kafka_key, value);
+        // Set client.id if not provided
+        if !config.contains_key("client.id") {
+            client_config.set("client.id", format!("franzoxide-{}", self.name));
+        }
+
+        // Set group.id if not provided
+        if !config.contains_key("group.id") {
+            client_config.set("group.id", format!("franzoxide-{}", self.name));
+        }
+
+        // Set auto.offset.reset if not provided
+        if !config.contains_key("auto.offset.reset") {
+            client_config.set("auto.offset.reset", "earliest");
+        }
+
+        // Set enable.auto.commit to false
+        client_config.set("enable.auto.commit", "false");
+
+        // Copy all other config
+        for (key, value) in &config {
+            if key != "topics" && key != "poll.timeout.ms" && key != "batch.size" {
+                client_config.set(key, value);
             }
         }
 
-        // Create the consumer
+        // Set log level
+        client_config.set_log_level(RDKafkaLogLevel::Debug);
+
+        // Create consumer with custom context
         let consumer: LoggingConsumer = client_config
-            .create_with_context(context)
+            .create_with_context(KafkaSourceContext)
             .map_err(ConnectorError::KafkaError)?;
 
         // Subscribe to topics
-        let topic_refs: Vec<&str> = self.topics.iter().map(|s| s.as_str()).collect();
+        let topic_strs: Vec<&str> = self.topics.iter().map(|s| s.as_str()).collect();
         consumer
-            .subscribe(&topic_refs)
+            .subscribe(&topic_strs)
             .map_err(ConnectorError::KafkaError)?;
 
+        // Store consumer
         self.consumer = Some(consumer);
 
-        self.state = ConnectorState::Stopped;
+        // Update state
+        self.state = ConnectorState::Uninitialized;
 
         Ok(())
     }
 
     async fn start(&mut self) -> ConnectorResult<()> {
-        info!("Starting Kafka source connector: {}", self.name);
-
-        // Start the polling loop
-        self.start_polling_loop().await?;
+        if self.state != ConnectorState::Uninitialized {
+            return Err(ConnectorError::General(
+                "Connector not initialized".to_string(),
+            ));
+        }
 
         self.state = ConnectorState::Running;
         Ok(())
     }
 
     async fn stop(&mut self) -> ConnectorResult<()> {
-        info!("Stopping Kafka source connector: {}", self.name);
-
-        // The polling loop will stop when the connector is dropped
+        if self.state != ConnectorState::Running {
+            return Err(ConnectorError::General("Connector not running".to_string()));
+        }
 
         self.state = ConnectorState::Stopped;
         Ok(())
@@ -522,21 +478,21 @@ impl SourceConnector for KafkaSourceConnector {
     }
 
     async fn commit(&mut self, offsets: Vec<(String, i32, i64)>) -> ConnectorResult<()> {
-        let consumer = self
-            .consumer
-            .as_ref()
-            .ok_or_else(|| ConnectorError::General("Kafka consumer not initialized".to_string()))?;
+        let consumer = match &self.consumer {
+            Some(c) => c,
+            None => {
+                return Err(ConnectorError::General(
+                    "Kafka consumer not initialized".to_string(),
+                ))
+            }
+        };
 
-        // Create a topic partition list for committing
         let mut tpl = TopicPartitionList::new();
         for (topic, partition, offset) in offsets {
             tpl.add_partition_offset(&topic, partition, Offset::Offset(offset))
-                .map_err(|e| {
-                    ConnectorError::General(format!("Failed to add partition offset: {}", e))
-                })?;
+                .map_err(ConnectorError::KafkaError)?;
         }
 
-        // Commit offsets
         consumer
             .commit(&tpl, CommitMode::Async)
             .map_err(ConnectorError::KafkaError)?;
@@ -547,6 +503,12 @@ impl SourceConnector for KafkaSourceConnector {
 
 /// Factory for creating Kafka source connector tasks
 pub struct KafkaSourceConnectorFactory;
+
+impl Default for KafkaSourceConnectorFactory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl KafkaSourceConnectorFactory {
     /// Create a new Kafka source connector factory
